@@ -1,6 +1,5 @@
 package myflink;
 
-import org.apache.flink.api.common.eventtime.AscendingTimestampsWatermarks;
 import org.apache.flink.api.common.eventtime.TimestampAssigner;
 import org.apache.flink.api.common.eventtime.TimestampAssignerSupplier;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
@@ -9,7 +8,6 @@ import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.java.io.PojoCsvInputFormat;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.typeutils.PojoTypeInfo;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.configuration.Configuration;
@@ -18,7 +16,6 @@ import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.AscendingTimestampExtractor;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.time.Time;
@@ -26,7 +23,6 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 
 import java.io.File;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.sql.Timestamp;
 import java.util.ArrayList;
@@ -78,36 +74,9 @@ public class HotItems {
         // 设置时间窗口和滑动时间 统计点击量
         SingleOutputStreamOperator<ItemViewCount> windowedData = filterData.keyBy(behavior -> behavior.itemId)
                 .timeWindow(Time.minutes(60), Time.minutes(5))
-                .aggregate(new AggregateFunction<UserBehavior, Long, Long>() {
-
-                    @Override
-                    public Long createAccumulator() {
-                        return 0L;
-                    }
-
-                    @Override
-                    public Long add(UserBehavior value, Long accumulator) {
-                        return accumulator + 1;
-                    }
-
-                    @Override
-                    public Long getResult(Long accumulator) {
-                        return accumulator;
-                    }
-
-                    @Override
-                    public Long merge(Long a, Long b) {
-                        return a + b;
-                    }
-                }, new WindowFunction<Long, ItemViewCount, Long, TimeWindow>() {
-
-                    @Override
-                    public void apply(Long aLong, TimeWindow window, Iterable<Long> input, Collector<ItemViewCount> out) throws Exception {
-                        Long itemId = aLong;
-                        Long viewCount = input.iterator().next();
-                        out.collect(ItemViewCount.of(itemId, window.getEnd(), viewCount));
-                    }
-                });
+                .aggregate(
+                        new aggregateCount()
+                , new windowOutPut());
 
         // 求topN
         SingleOutputStreamOperator<String> topNData = windowedData.keyBy(item -> item.windowEnd)
@@ -115,6 +84,39 @@ public class HotItems {
         topNData.print();
         env.setParallelism(1);
         env.execute("Hot items Job");
+    }
+
+    /** 窗口输出结果 **/
+    public static class windowOutPut implements WindowFunction<Long, ItemViewCount, Long, TimeWindow> {
+        @Override
+        public void apply(Long aLong, TimeWindow window, Iterable<Long> input, Collector<ItemViewCount> out) throws Exception {
+            Long itemId = aLong;
+            Long viewCount = input.iterator().next();
+            out.collect(ItemViewCount.of(itemId, window.getEnd(), viewCount));
+        }
+    }
+
+    /** 计数器 **/
+    public static class aggregateCount implements AggregateFunction<UserBehavior, Long, Long> {
+        @Override
+        public Long createAccumulator() {
+            return 0L;
+        }
+
+        @Override
+        public Long add(UserBehavior value, Long accumulator) {
+            return accumulator + 1;
+        }
+
+        @Override
+        public Long getResult(Long accumulator) {
+            return accumulator;
+        }
+
+        @Override
+        public Long merge(Long a, Long b) {
+            return a + b;
+        }
     }
 
     public static class timeStamp implements TimestampAssigner<UserBehavior>{
